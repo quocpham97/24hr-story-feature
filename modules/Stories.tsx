@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/carousel";
 import { getBase64 } from "@/utils/file";
 import { Dialog, DialogBackdrop, DialogPanel } from "@headlessui/react";
+import clsx from "clsx";
 import { isBefore } from "date-fns";
 import React, { useEffect, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
@@ -17,6 +18,7 @@ interface Story {
   src: string;
   createdAt: string;
   expiresAt: string;
+  isViewed: boolean;
 }
 
 function Stories() {
@@ -26,9 +28,9 @@ function Stories() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const [api, setApi] = useState<CarouselApi>();
-  const [currentStory, setCurrentStory] = useState<number | undefined>(
-    undefined
-  );
+  const [indexInProgressStory, setIndexInProgressStory] = useState<
+    number | undefined
+  >(undefined);
 
   const addNewStory = () => {
     inputRef.current?.click();
@@ -42,39 +44,49 @@ function Stories() {
       const stories = localStorage.getItem("stories");
       localStorage.setItem(
         "stories",
-        JSON.stringify([
-          ...(stories
-            ? JSON.parse(stories).filter((story: Story) =>
-                isBefore(new Date(), new Date(story.expiresAt))
-              )
-            : []),
-          {
-            id: uuidv4(),
-            src: base64,
-            createdAt: new Date().toISOString(),
-            expiresAt: new Date(
-              new Date().getTime() + 1000 * 60 * 60 * 24
-            ).toISOString(),
-          },
-        ])
+        JSON.stringify(
+          [
+            ...(stories ? JSON.parse(stories) : []),
+            {
+              id: uuidv4(),
+              src: base64,
+              createdAt: new Date().toISOString(),
+              expiresAt: new Date(
+                new Date().getTime() + 1000 * 60 * 60 * 24
+              ).toISOString(),
+              isViewed: false,
+            } as Story,
+          ].sort((story1, story2) => {
+            if (story1.isViewed && !story2.isViewed) {
+              return 1;
+            } else if (!story1.isViewed && story2.isViewed) {
+              return -1;
+            } else {
+              return 0;
+            }
+          })
+        )
       );
 
       // Dispatch custom event to notify about localStorage change
       window.dispatchEvent(new Event("localStorageChange"));
+
+      event.target.value = "";
     }
   };
 
   const handleSelectStory = (storyId: string) => {
-    const story = listOfStories.find((story) => story.id === storyId);
-    let firstStory = story;
-    if (!story) return;
+    const selectedStory = listOfStories.find((story) => story.id === storyId);
+    let firstStory = selectedStory;
+    if (!selectedStory) return;
 
-    if (!isBefore(new Date(), new Date(story.expiresAt)))
+    if (!isBefore(new Date(), new Date(selectedStory.expiresAt)))
       firstStory = {
         id: uuidv4(),
         src: "",
         createdAt: "",
         expiresAt: "",
+        isViewed: false,
       };
     const remainingStories = listOfStories.filter(
       (story) =>
@@ -85,33 +97,17 @@ function Stories() {
       () => [firstStory, ...remainingStories].filter(Boolean) as Story[]
     );
     setOpen(true);
-
-    localStorage.setItem(
-      "stories",
-      JSON.stringify([
-        ...listOfStories.filter((story) =>
-          isBefore(new Date(), new Date(story.expiresAt))
-        ),
-      ])
-    );
-    window.dispatchEvent(new Event("localStorageChange"));
   };
 
   const handleExitViewStory = () => {
     setOpen(false);
     setRearrangeStories([]);
-    setCurrentStory(undefined);
+    setIndexInProgressStory(undefined);
   };
 
   useEffect(() => {
     const stories = localStorage.getItem("stories");
-    setListOfStories(
-      stories
-        ? JSON.parse(stories).filter((story: Story) =>
-            isBefore(new Date(), new Date(story.expiresAt))
-          )
-        : []
-    );
+    setListOfStories(stories ? JSON.parse(stories) : []);
 
     // Listen for localStorage changes
     const handleStorageChange = (e: StorageEvent) => {
@@ -144,28 +140,68 @@ function Stories() {
       return;
     }
 
-    setCurrentStory(api.selectedScrollSnap());
+    setIndexInProgressStory(api.selectedScrollSnap());
 
     api.on("select", () => {
-      setCurrentStory(api.selectedScrollSnap());
+      setIndexInProgressStory(api.selectedScrollSnap());
     });
   }, [api]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      if (currentStory === rearrangeStories.length - 1) handleExitViewStory();
+      if (indexInProgressStory === rearrangeStories.length - 1)
+        handleExitViewStory();
       else api?.scrollNext();
     }, 3000);
+
+    if (indexInProgressStory !== undefined) {
+      const selectedStory = rearrangeStories[indexInProgressStory];
+      localStorage.setItem(
+        "stories",
+        JSON.stringify(
+          listOfStories
+            .filter((story) => isBefore(new Date(), new Date(story.expiresAt)))
+            .map((story) =>
+              story.id === selectedStory.id
+                ? { ...story, isViewed: true }
+                : story
+            )
+            .sort((story1, story2) => {
+              if (
+                isBefore(new Date(story2.createdAt), new Date(story1.createdAt))
+              ) {
+                return 1;
+              } else if (
+                isBefore(new Date(story1.createdAt), new Date(story2.createdAt))
+              ) {
+                return -1;
+              } else {
+                return 0;
+              }
+            })
+            .sort((story1, story2) => {
+              if (story1.isViewed && !story2.isViewed) {
+                return 1;
+              } else if (!story1.isViewed && story2.isViewed) {
+                return -1;
+              } else {
+                return 0;
+              }
+            })
+        )
+      );
+      window.dispatchEvent(new Event("localStorageChange"));
+    }
 
     // Cleanup function to clear the timeout if the component unmounts
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentStory]);
+  }, [indexInProgressStory]);
 
   return (
     <div className="min-h-screen p-8 gap-16 font-[family-name:var(--font-geist-sans)]">
       <main className="flex flex-col gap-[12px] items-center">
-        <div className="flex gap-2 items-center w-full md:w-2xl border border-gray-300 rounded-md p-4 overflow-hidden">
+        <div className="flex gap-2 items-center w-full md:w-2xl border border-gray-300 rounded-md p-4 overflow-auto no-scrollbar">
           <div className="flex items-center">
             <input
               ref={inputRef}
@@ -176,13 +212,13 @@ function Stories() {
             />
             <button
               onClick={addNewStory}
-              className="flex items-center justify-center cursor-pointer text-gray-400 hover:text-gray-500 border border-gray-400 rounded-full hover:border-gray-500 w-10 h-10 box-border"
+              className="flex items-center justify-center cursor-pointer text-gray-400 hover:text-gray-500 border-2 border-gray-400 rounded-full hover:border-gray-500 w-12 h-12 box-border"
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
                 fill="none"
                 viewBox="0 0 24 24"
-                strokeWidth={1.5}
+                strokeWidth={2}
                 stroke="currentColor"
                 className="size-6"
               >
@@ -197,7 +233,10 @@ function Stories() {
           {listOfStories.map((story) => (
             <div
               key={story.id}
-              className="flex aspect-square items-center justify-center w-10 h-10 rounded-full border border-gray-300 box-border cursor-pointer bg-foreground overflow-hidden"
+              className={clsx(
+                "flex aspect-square items-center justify-center min-w-12 h-12 rounded-full border-2 box-border cursor-pointer bg-foreground overflow-hidden",
+                story.isViewed ? "border-gray-300" : "border-blue-400"
+              )}
               onClick={() => {
                 handleSelectStory(story.id);
               }}
@@ -226,22 +265,22 @@ function Stories() {
               <div className="flex min-h-full justify-center text-center items-center sm:p-0">
                 <DialogPanel
                   transition
-                  className="relative transform overflow-hidden text-left shadow-xl transition-all data-closed:translate-y-4 data-closed:opacity-0 data-enter:duration-300 data-enter:ease-out data-leave:duration-200 data-leave:ease-in w-full max-w-md data-closed:sm:translate-y-0 data-closed:sm:scale-95 aspect-[1080/1920]"
+                  className="relative transform overflow-hidden text-left shadow-xl transition-all data-closed:translate-y-4 data-closed:opacity-0 data-enter:duration-300 data-enter:ease-out data-leave:duration-200 data-leave:ease-in data-closed:sm:translate-y-0 data-closed:sm:scale-95 h-dvh aspect-[1080/1920] flex items-center"
                 >
-                  <div className="fixed top-0 w-full max-w-md flex gap-2 py-4">
+                  <div className="absolute z-10 w-full top-0 flex gap-2 py-4">
                     {rearrangeStories.length > 0 &&
                       rearrangeStories.map((_, index) => (
                         <div
                           key={index}
                           className={`w-auto h-1 flex-1 ${
-                            index >= Number(currentStory)
-                              ? "bg-foreground/50"
-                              : "bg-foreground"
+                            index >= Number(indexInProgressStory)
+                              ? "bg-white/50"
+                              : "bg-white"
                           }`}
                         >
                           <div
-                            className={`w-0 h-full bg-foreground ${
-                              currentStory === index ? "scaleWidth" : ""
+                            className={`w-0 h-full bg-white ${
+                              indexInProgressStory === index ? "scaleWidth" : ""
                             }`}
                           />
                         </div>
@@ -251,7 +290,7 @@ function Stories() {
                   <Carousel
                     setApi={setApi}
                     opts={{ slidesToScroll: 1 }}
-                    className="w-full max-w-md bg-background"
+                    className="w-full bg-background"
                   >
                     <CarouselContent>
                       {rearrangeStories.map((story, index) => (
